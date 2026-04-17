@@ -423,8 +423,12 @@ install_and_configure_bouncer() {
 
   if [ $bouncer_check_result -eq 0 ]; then
     warning "Баунсер уже зарегистрирован, пересоздаю ключ"
-    cscli bouncers delete "$BOUNCER_NAME" 2>/dev/null
-    [ $? -ne 0 ] && warning "Не удалось удалить старый баунсер, продолжаю"
+    local delete_output
+    delete_output="$(cscli bouncers delete "$BOUNCER_NAME" -f 2>&1)"
+    if [ $? -ne 0 ]; then
+      delete_output="$(printf 'y\n' | cscli bouncers delete "$BOUNCER_NAME" 2>&1)"
+    fi
+    [ $? -ne 0 ] && { warning "Не удалось удалить старый баунсер, продолжаю"; echo "$delete_output"; }
   fi
 
   local bouncer_key_json
