@@ -30,6 +30,7 @@ BOUNCER_NAME="AutoBouncer-$(hostname)"
 # 3) object with nested bouncers   -> .bouncers[]?.name
 JQ_BOUNCER_NAMES_FILTER='if type=="array" then .[]?.name // empty elif type=="object" then (.name // (.bouncers[]?.name // empty)) else empty end'
 API_KEY_FALLBACK_MIN_LEN=20
+API_KEY_REGEX="^[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}$"
 LAPI_START_WAIT_SECONDS=3
 LAPI_READY_MAX_WAIT_SECONDS=60
 CROWDSEC_RESTART_WAIT_SECONDS=5
@@ -444,12 +445,15 @@ install_and_configure_bouncer() {
   fi
 
   BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r 'if type=="string" then . elif type=="object" then (.api_key // .key // .credentials.api_key // .credentials.key // empty) else empty end' 2>/dev/null | head -n1)"
-  if ! echo "$BOUNCER_API_KEY" | grep -Eq "^[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}$"; then
+  if ! echo "$BOUNCER_API_KEY" | grep -Eq "$API_KEY_REGEX"; then
     BOUNCER_API_KEY=""
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Last-resort JSON fallback for non-standard nesting from older/newer cscli versions.
-    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r ".. | .api_key? // .key? // strings | select(test(\"^[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}$\"))" 2>/dev/null | head -n1)"
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.. | .api_key? // .key? // empty' 2>/dev/null | head -n1)"
+    if ! echo "$BOUNCER_API_KEY" | grep -Eq "$API_KEY_REGEX"; then
+      BOUNCER_API_KEY=""
+    fi
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Fallback: extract token-like value only from key=value or key: value patterns.
