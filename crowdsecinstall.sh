@@ -31,6 +31,7 @@ BOUNCER_NAME="AutoBouncer-$(hostname)"
 JQ_BOUNCER_NAMES_FILTER='if type=="array" then .[]?.name // empty elif type=="object" then (.name // (.bouncers[]?.name // empty)) else empty end'
 API_KEY_FALLBACK_MIN_LEN=20
 LAPI_START_WAIT_SECONDS=3
+LAPI_READY_MAX_WAIT_SECONDS=60
 CROWDSEC_RESTART_WAIT_SECONDS=5
 BOUNCER_RESTART_WAIT_SECONDS=2
 
@@ -392,7 +393,16 @@ install_and_configure_bouncer() {
   fi
 
   systemctl start crowdsec || { error "Не удалось запустить crowdsec перед генерацией ключа"; exit 1; }
-  sleep "$LAPI_START_WAIT_SECONDS"
+  local lapi_wait_elapsed=0
+  while [ "$lapi_wait_elapsed" -lt "$LAPI_READY_MAX_WAIT_SECONDS" ]; do
+    cscli bouncers list -o json >/dev/null 2>&1 && break
+    sleep "$LAPI_START_WAIT_SECONDS"
+    lapi_wait_elapsed=$((lapi_wait_elapsed + LAPI_START_WAIT_SECONDS))
+  done
+  if [ "$lapi_wait_elapsed" -ge "$LAPI_READY_MAX_WAIT_SECONDS" ]; then
+    error "LAPI не стал доступен за ${LAPI_READY_MAX_WAIT_SECONDS} секунд"
+    exit 1
+  fi
 
   local bouncer_check_result=1
   local bouncers_list_output
@@ -433,14 +443,18 @@ install_and_configure_bouncer() {
     exit 1
   fi
 
-  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.api_key // .key // .credentials.api_key // .credentials.key // empty' 2>/dev/null | head -n1)"
+  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r 'if type=="string" then . elif type=="object" then (.api_key // .key // .credentials.api_key // .credentials.key // empty) else empty end' 2>/dev/null | head -n1)"
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Last-resort JSON fallback for non-standard nesting from older/newer cscli versions.
-    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.. | .api_key? // .key? // empty' 2>/dev/null | head -n1)"
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r ".. | .api_key? // .key? // strings | select(test(\"^[A-Za-z0-9_+/=-]{${API_KEY_FALLBACK_MIN_LEN},}$\"))" 2>/dev/null | head -n1)"
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Fallback: extract token-like value only from key=value or key: value patterns.
-    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eio "(api[ _-]?key|key)[^:=]*[:=][[:space:]]*[A-Za-z0-9_-]{${API_KEY_FALLBACK_MIN_LEN},}" | grep -Eo "[A-Za-z0-9_-]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eio "(api[ _-]?key|key)[^:=]*[:=][[:space:]]*[A-Za-z0-9_+\/=-]{${API_KEY_FALLBACK_MIN_LEN},}" | grep -Eo "[A-Za-z0-9_+\/=-]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
+    [ -n "$BOUNCER_API_KEY" ] && warning "API ключ извлечён fallback-парсингом текста, проверьте корректность"
+  fi
+  if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eo "[A-Za-z0-9_+\/=-]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
     [ -n "$BOUNCER_API_KEY" ] && warning "API ключ извлечён fallback-парсингом текста, проверьте корректность"
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
