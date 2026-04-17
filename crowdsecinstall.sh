@@ -187,14 +187,16 @@ preflight_checks() {
   apt-get update -y >/dev/null 2>&1
 
   local dep
+  local dep_found
   for dep in "${DEPENDENCIES[@]}"; do
+    dep_found=1
     if [ "$dep" = "netstat" ]; then
-      command -v netstat >/dev/null 2>&1
+      command -v netstat >/dev/null 2>&1 && dep_found=0
     else
-      command -v "$dep" >/dev/null 2>&1
+      command -v "$dep" >/dev/null 2>&1 && dep_found=0
     fi
 
-    if [ $? -eq 0 ]; then
+    if [ "$dep_found" -eq 0 ]; then
       success "Зависимость найдена: ${dep}"
       continue
     fi
@@ -309,31 +311,29 @@ configure_lapi_port() {
 
   info "Применяю новый порт LAPI: ${LAPI_PORT}"
 
-  sed -i "s|listen_uri: 127.0.0.1:${current_port}|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML"
-  if [ $? -ne 0 ]; then
+  sed -i "s|listen_uri: 127.0.0.1:${current_port}|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML" || {
     error "Не удалось обновить listen_uri в $CONFIG_YAML"
     exit 1
-  fi
+  }
 
-  sed -i "s|url: http://127.0.0.1:${current_port}|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML"
-  if [ $? -ne 0 ]; then
+  sed -i "s|url: http://127.0.0.1:${current_port}|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
     error "Не удалось обновить url в $CREDENTIALS_YAML"
     exit 1
-  fi
+  }
 
   # Fallback replacement patterns if exact line mismatch existed
-  grep -q "listen_uri: 127.0.0.1:${LAPI_PORT}" "$CONFIG_YAML" || \
-    sed -i -E "s|listen_uri:[[:space:]]*127.0.0.1:[0-9]+|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML"
-  if [ $? -ne 0 ]; then
-    error "Не удалось применить fallback патч listen_uri"
-    exit 1
+  if ! grep -q "listen_uri: 127.0.0.1:${LAPI_PORT}" "$CONFIG_YAML"; then
+    sed -i -E "s|listen_uri:[[:space:]]*127.0.0.1:[0-9]+|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML" || {
+      error "Не удалось применить fallback патч listen_uri"
+      exit 1
+    }
   fi
 
-  grep -q "url: http://127.0.0.1:${LAPI_PORT}" "$CREDENTIALS_YAML" || \
-    sed -i -E "s|url:[[:space:]]*http://127.0.0.1:[0-9]+|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML"
-  if [ $? -ne 0 ]; then
-    error "Не удалось применить fallback патч url"
-    exit 1
+  if ! grep -q "url: http://127.0.0.1:${LAPI_PORT}" "$CREDENTIALS_YAML"; then
+    sed -i -E "s|url:[[:space:]]*http://127.0.0.1:[0-9]+|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
+      error "Не удалось применить fallback патч url"
+      exit 1
+    }
   fi
 
   grep -q "${LAPI_PORT}" "$CONFIG_YAML"
@@ -417,13 +417,15 @@ EOF
     fi
 
     if grep -q "^api_url:" "$BOUNCER_CONFIG"; then
-      sed -i -E "s|^api_url:.*|api_url: \"http://127.0.0.1:${LAPI_PORT}\"|g" "$BOUNCER_CONFIG"
+      sed -i -E "s|^api_url:.*|api_url: \"http://127.0.0.1:${LAPI_PORT}\"|g" "$BOUNCER_CONFIG" || {
+        error "Не удалось обновить api_url в $BOUNCER_CONFIG"
+        exit 1
+      }
     else
-      printf '\napi_url: "http://127.0.0.1:%s"\n' "$LAPI_PORT" >> "$BOUNCER_CONFIG"
-    fi
-    if [ $? -ne 0 ]; then
-      error "Не удалось обновить api_url в $BOUNCER_CONFIG"
-      exit 1
+      printf '\napi_url: "http://127.0.0.1:%s"\n' "$LAPI_PORT" >> "$BOUNCER_CONFIG" || {
+        error "Не удалось добавить api_url в $BOUNCER_CONFIG"
+        exit 1
+      }
     fi
     success "Конфиг баунсера обновлен (api_key/api_url)"
   fi
