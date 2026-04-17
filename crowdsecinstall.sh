@@ -2,7 +2,7 @@
 #
 # crowdsecinstall.sh
 # Version: 1.0.0
-# Author: DevOps Automation
+# Author: Biggiko_
 # Date: 2026-04-17
 # Description: Production-grade installer for CrowdSec + Firewall Bouncer on Ubuntu/Debian.
 
@@ -11,10 +11,11 @@
 # =========================================================
 
 SCRIPT_VERSION="1.0.0"
-SCRIPT_AUTHOR="DevOps Automation"
+SCRIPT_AUTHOR="Biggiko_"
 SCRIPT_DATE="2026-04-17"
 
 CROWDSEC_REPO_INSTALL_URL="https://install.crowdsec.net"
+CONSOLE_URL="https://app.crowdsec.net"
 DEFAULT_LAPI_PORT=8080
 FALLBACK_LAPI_PORT=7422
 CONFIG_YAML="/etc/crowdsec/config.yaml"
@@ -73,7 +74,7 @@ ask_yes_no() {
   # default: yes on empty input
   local prompt="$1"
   local answer
-  read -rp "$(echo -e "${YELLOW}${prompt} [Y/n]: ${NC}")" answer
+  read -rp "$(echo -e "${YELLOW}➤ ${prompt} [Y/n] (введите y/n и Enter): ${NC}")" answer
   case "$answer" in
     ""|Y|y|yes|YES) return 0 ;;
     N|n|no|NO) return 1 ;;
@@ -308,6 +309,12 @@ configure_lapi_port() {
 
   local holder
   holder="$(get_process_on_port "$current_port")"
+  if echo "$holder" | grep -qi "crowdsec"; then
+    info "Порт ${current_port} используется самим crowdsec — порт оставляю без изменений."
+    LAPI_PORT="$current_port"
+    return 0
+  fi
+
   warning "Порт ${current_port} занят процессом: ${holder}"
 
   if ask_yes_no "Автоматически переключить на порт ${FALLBACK_LAPI_PORT}?"; then
@@ -321,7 +328,7 @@ configure_lapi_port() {
 
   while [ -z "$LAPI_PORT" ] || [ "$LAPI_PORT" = "$current_port" ] || is_port_busy "$LAPI_PORT"; do
     local custom_port
-    read -rp "$(echo -e "${YELLOW}Введите свободный порт (1024-65535): ${NC}")" custom_port
+    read -rp "$(echo -e "${YELLOW}➤ Введите свободный порт (1024-65535) и нажмите Enter: ${NC}")" custom_port
     if ! validate_port "$custom_port"; then
       warning "Некорректный порт: ${custom_port}"
       continue
@@ -378,6 +385,10 @@ configure_lapi_port() {
   fi
 
   success "LAPI порт успешно изменен на ${LAPI_PORT}"
+
+  systemctl restart crowdsec || { error "Не удалось перезапустить crowdsec после смены LAPI порта"; exit 1; }
+  sleep "$CROWDSEC_RESTART_WAIT_SECONDS"
+  success "crowdsec перезапущен после смены LAPI порта"
 }
 
 install_and_configure_bouncer() {
@@ -575,6 +586,50 @@ finalize_installation() {
   cscli metrics --no-unit 2>/dev/null | head -30
 }
 
+connect_console() {
+  local console_token
+  local enroll_output
+  local enroll_ok=1
+
+  info "Подключение к CrowdSec Console"
+  echo "1) Откройте ${CONSOLE_URL}"
+  echo "2) Перейдите в Security Engines -> Add Security Engine"
+  echo "3) Скопируйте Enrollment Token"
+
+  while true; do
+    read -rsp "$(echo -e "${YELLOW}➤ Вставьте Enrollment Token и нажмите Enter: ${NC}")" console_token
+    echo ""
+    [ -n "$console_token" ] && break
+    warning "Токен не может быть пустым."
+  done
+
+  enroll_output="$(cscli console enroll --token "$console_token" 2>&1)"
+  if [ $? -eq 0 ]; then
+    enroll_ok=0
+  else
+    enroll_output="$(cscli console enroll -t "$console_token" 2>&1)"
+    if [ $? -eq 0 ]; then
+      enroll_ok=0
+    else
+      enroll_output="$(cscli console enroll "$console_token" 2>&1)"
+      [ $? -eq 0 ] && enroll_ok=0
+    fi
+  fi
+
+  if [ "$enroll_ok" -ne 0 ]; then
+    error "Не удалось выполнить enrollment в Console. Проверьте токен."
+    echo "$enroll_output"
+    exit 1
+  fi
+  success "Enrollment token принят."
+
+  read -rp "$(echo -e "${YELLOW}➤ Подтвердите подключение на ${CONSOLE_URL}, затем нажмите Enter для продолжения: ${NC}")" _
+
+  systemctl restart crowdsec || { error "Не удалось перезапустить crowdsec после подтверждения в Console"; exit 1; }
+  sleep "$CROWDSEC_RESTART_WAIT_SECONDS"
+  success "crowdsec перезапущен после подключения к Console"
+}
+
 print_final_summary() {
   local key_preview
   if [ -n "$BOUNCER_API_KEY" ] && [ "$BOUNCER_API_KEY" != "null" ]; then
@@ -592,6 +647,7 @@ print_final_summary() {
   echo "     LAPI Порт:     ${LAPI_PORT}"
   echo "     Баунсер:       ${BOUNCER_NAME}"
   echo "     API Ключ:      ${key_preview}"
+  echo "     Console:       ${CONSOLE_URL}"
   echo ""
   echo "  📊 ПОЛЕЗНЫЕ КОМАНДЫ:"
   echo "     Список баунсеров:  cscli bouncers list"
@@ -616,28 +672,32 @@ main() {
   print_banner
 
   print_separator
-  step "ШАГ 1/6: Pre-flight проверки"
+  step "ШАГ 1/7: Pre-flight проверки"
   preflight_checks
 
   print_separator
-  step "ШАГ 2/6: Установка CrowdSec"
+  step "ШАГ 2/7: Установка CrowdSec"
   install_crowdsec
 
   print_separator
-  step "ШАГ 3/6: Конфигурация LAPI порта"
+  step "ШАГ 3/7: Конфигурация LAPI порта"
   configure_lapi_port
 
   print_separator
-  step "ШАГ 4/6: Установка и конфигурация Firewall Bouncer"
+  step "ШАГ 4/7: Установка и конфигурация Firewall Bouncer"
   install_and_configure_bouncer
 
   print_separator
-  step "ШАГ 5/6: Настройка L7 защиты (Nginx)"
+  step "ШАГ 5/7: Настройка L7 защиты (Nginx)"
   configure_nginx_protection
 
   print_separator
-  step "ШАГ 6/6: Финализация и запуск сервисов"
+  step "ШАГ 6/7: Финализация и запуск сервисов"
   finalize_installation
+
+  print_separator
+  step "ШАГ 7/7: Подключение к CrowdSec Console"
+  connect_console
 
   print_final_summary
 }
