@@ -24,6 +24,12 @@ BOUNCER_CONFIG="/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml"
 ACQUISITION_YAML="/etc/crowdsec/acquisition.yaml"
 LOG_FILE="/var/log/crowdsec-install.log"
 BOUNCER_NAME="AutoBouncer-$(hostname)"
+# Handles three possible cscli JSON shapes:
+# 1) array of bouncer objects      -> .[]?.name
+# 2) single object with name       -> .name
+# 3) object with nested bouncers   -> .bouncers[]?.name
+JQ_BOUNCER_NAMES_FILTER='if type=="array" then .[]?.name // empty elif type=="object" then (.name // (.bouncers[]?.name // empty)) else empty end'
+API_KEY_FALLBACK_MIN_LEN=20
 LAPI_START_WAIT_SECONDS=3
 CROWDSEC_RESTART_WAIT_SECONDS=5
 BOUNCER_RESTART_WAIT_SECONDS=2
@@ -403,8 +409,19 @@ install_and_configure_bouncer() {
   systemctl start crowdsec || { error "Не удалось запустить crowdsec перед генерацией ключа"; exit 1; }
   sleep "$LAPI_START_WAIT_SECONDS"
 
-  cscli bouncers list -o json 2>/dev/null | jq -r '.[].name' | grep -q "$BOUNCER_NAME"
-  if [ $? -eq 0 ]; then
+  local bouncer_check_result=1
+  local bouncers_list_output
+  bouncers_list_output="$(cscli bouncers list -o json 2>/dev/null || true)"
+
+  if [ -n "$bouncers_list_output" ] && echo "$bouncers_list_output" | jq -e 'type=="array" or type=="object"' >/dev/null 2>&1; then
+    echo "$bouncers_list_output" | jq -r "$JQ_BOUNCER_NAMES_FILTER" 2>/dev/null | grep -Fq "$BOUNCER_NAME"
+    bouncer_check_result=$?
+  else
+    cscli bouncers list 2>/dev/null | grep -Fq "$BOUNCER_NAME"
+    bouncer_check_result=$?
+  fi
+
+  if [ $bouncer_check_result -eq 0 ]; then
     warning "Баунсер уже зарегистрирован, пересоздаю ключ"
     cscli bouncers delete "$BOUNCER_NAME" 2>/dev/null
     [ $? -ne 0 ] && warning "Не удалось удалить старый баунсер, продолжаю"
@@ -418,7 +435,16 @@ install_and_configure_bouncer() {
     exit 1
   fi
 
-  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.api_key // .key // empty')"
+  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.api_key // .key // .credentials.api_key // .credentials.key // empty' 2>/dev/null | head -n1)"
+  if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
+    # Last-resort JSON fallback for non-standard nesting from older/newer cscli versions.
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.. | .api_key? // .key? // empty' 2>/dev/null | head -n1)"
+  fi
+  if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
+    # Fallback: extract token-like value only from key=value or key: value patterns.
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eio "(api[ _-]?key|key)[^:=]*[:=][[:space:]]*[A-Za-z0-9_-]{${API_KEY_FALLBACK_MIN_LEN},}" | grep -Eo "[A-Za-z0-9_-]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
+    [ -n "$BOUNCER_API_KEY" ] && warning "API ключ извлечён fallback-парсингом текста, проверьте корректность"
+  fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     error "API ключ пустой или невалидный"
     exit 1
