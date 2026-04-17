@@ -438,7 +438,9 @@ iptables_chains:
   - FORWARD
   - DOCKER-USER
 EOF
-      cfg_status=$?
+      if [ "$cfg_status" -eq 0 ]; then
+        cfg_status=$?
+      fi
     fi
     if [ "$cfg_status" -ne 0 ]; then
       error "Не удалось создать конфиг баунсера"
