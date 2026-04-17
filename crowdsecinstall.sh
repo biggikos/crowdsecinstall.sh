@@ -65,11 +65,11 @@ NC='\033[0m' # No Color / Reset
 # 3. Объявление всех вспомогательных функций
 # =========================================================
 
-success()  { echo -e "${GREEN}[✔] $1${NC}"; }
-error()    { echo -e "${RED}[✘] $1${NC}"; }
-warning()  { echo -e "${YELLOW}[!] $1${NC}"; }
-info()     { echo -e "${BLUE}[i] $1${NC}"; }
-step()     { echo -e "\n${CYAN}${BOLD}>>> $1${NC}"; }
+success()  { echo -e "${GREEN}[✔] $1${NC}" | tee -a "$LOG_FILE"; }
+error()    { echo -e "${RED}[✘] $1${NC}" | tee -a "$LOG_FILE" >&2; }
+warning()  { echo -e "${YELLOW}[!] $1${NC}" | tee -a "$LOG_FILE"; }
+info()     { echo -e "${BLUE}[i] $1${NC}" | tee -a "$LOG_FILE"; }
+step()     { echo -e "\n${CYAN}${BOLD}>>> $1${NC}" | tee -a "$LOG_FILE"; }
 
 print_separator() {
   echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -80,7 +80,7 @@ ask_yes_no() {
   # default: yes on empty input
   local prompt="$1"
   local answer
-  read -rp "$(echo -e "${YELLOW}➤ ${prompt} [Y/n] (введите y/n и Enter): ${NC}")" answer
+  read -rp "$(echo -e "${YELLOW}➤ ${prompt} [Y/n] (введите y/n и Enter): ${NC}")" answer </dev/tty
   case "$answer" in
     ""|Y|y|yes|YES) return 0 ;;
     N|n|no|NO) return 1 ;;
@@ -115,11 +115,6 @@ validate_port() {
 }
 
 init_logging() {
-  if [ "$(id -u)" -ne 0 ]; then
-    error "Этот скрипт должен запускаться от root. Используйте: sudo bash crowdsecinstall.sh"
-    exit 1
-  fi
-
   touch "$LOG_FILE" 2>/dev/null || {
     error "Не удалось создать лог-файл: $LOG_FILE"
     exit 1
@@ -129,12 +124,9 @@ init_logging() {
     echo ""
     echo "============================================================"
     echo "CrowdSec installation started at: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Script version: $SCRIPT_VERSION"
     echo "============================================================"
   } >> "$LOG_FILE"
-
-  exec > >(while IFS= read -r line; do
-    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line" | tee -a "$LOG_FILE"
-  done) 2>&1
 }
 
 print_banner() {
@@ -152,14 +144,7 @@ EOF
 }
 
 preflight_checks() {
-  # 1.1 Root check
-  if [ "$(id -u)" -ne 0 ]; then
-    error "Скрипт должен выполняться от root. Пример: sudo bash crowdsecinstall.sh"
-    exit 1
-  fi
-  success "Проверка root пройдена"
-
-  # 1.2 OS check
+  # 1.1 OS check
   if [ ! -f /etc/os-release ]; then
     error "Файл /etc/os-release не найден, невозможно определить ОС"
     exit 1
@@ -241,24 +226,31 @@ preflight_checks() {
 }
 
 detect_firewall_mode() {
-  if command -v iptables >/dev/null 2>&1; then
-    local iptables_version
-    iptables_version="$(iptables -V 2>/dev/null)"
-    if echo "$iptables_version" | grep -qi "nf_tables"; then
-      FIREWALL_MODE="nftables"
-      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
-    else
-      FIREWALL_MODE="iptables"
-      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
+  local mode_detected="iptables"
+
+  if command -v nft >/dev/null 2>&1; then
+    if nft list tables >/dev/null 2>&1; then
+      if iptables --version 2>/dev/null | grep -q "legacy"; then
+        mode_detected="iptables"
+      else
+        mode_detected="nftables"
+      fi
     fi
-  elif command -v nft >/dev/null 2>&1; then
-    FIREWALL_MODE="nftables"
+  fi
+
+  if command -v iptables >/dev/null 2>&1; then
+    if iptables --version 2>/dev/null | grep -qi "nf_tables"; then
+      mode_detected="nftables"
+    fi
+  fi
+
+  FIREWALL_MODE="$mode_detected"
+  if [ "$FIREWALL_MODE" = "nftables" ]; then
     FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
   else
-    FIREWALL_MODE="iptables"
     FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
   fi
-  info "Выбран режим Firewall Bouncer: ${FIREWALL_MODE} (${FIREWALL_BOUNCER_PACKAGE})"
+  info "Режим Firewall Bouncer: ${FIREWALL_MODE} (${FIREWALL_BOUNCER_PACKAGE})"
 }
 
 install_crowdsec() {
@@ -323,28 +315,36 @@ configure_lapi_port() {
 
   warning "Порт ${current_port} занят процессом: ${holder}"
 
+  local new_port=""
+
   if ask_yes_no "Автоматически переключить на порт ${FALLBACK_LAPI_PORT}?"; then
     if ! is_port_busy "$FALLBACK_LAPI_PORT"; then
-      LAPI_PORT="$FALLBACK_LAPI_PORT"
-      success "Будет использован fallback порт: ${LAPI_PORT}"
+      new_port="$FALLBACK_LAPI_PORT"
+      success "Будет использован fallback порт: ${new_port}"
     else
       warning "Порт ${FALLBACK_LAPI_PORT} тоже занят. Нужно ввести порт вручную."
     fi
   fi
 
-  while [ -z "$LAPI_PORT" ] || [ "$LAPI_PORT" = "$current_port" ] || is_port_busy "$LAPI_PORT"; do
+  while [ -z "$new_port" ]; do
     local custom_port
-    read -rp "$(echo -e "${YELLOW}➤ Введите свободный порт (1024-65535) и нажмите Enter: ${NC}")" custom_port
+    read -rp "$(echo -e "${YELLOW}➤ Введите свободный порт (1024-65535) и нажмите Enter: ${NC}")" custom_port </dev/tty
     if ! validate_port "$custom_port"; then
       warning "Некорректный порт: ${custom_port}"
+      continue
+    fi
+    if [ "$custom_port" = "$current_port" ]; then
+      warning "Это текущий занятый порт ${current_port}, выберите другой."
       continue
     fi
     if is_port_busy "$custom_port"; then
       warning "Порт ${custom_port} уже занят, выберите другой."
       continue
     fi
-    LAPI_PORT="$custom_port"
+    new_port="$custom_port"
   done
+
+  LAPI_PORT="$new_port"
 
   if [ "$LAPI_PORT" = "$current_port" ]; then
     success "Порт не изменился: ${LAPI_PORT}"
@@ -353,30 +353,15 @@ configure_lapi_port() {
 
   info "Применяю новый порт LAPI: ${LAPI_PORT}"
 
-  sed -i "s|listen_uri: 127.0.0.1:${current_port}|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML" || {
+  sed -i -E "s|(listen_uri:[[:space:]]*)([^:]+:)${current_port}|\1\2${LAPI_PORT}|g" "$CONFIG_YAML" || {
     error "Не удалось обновить listen_uri в $CONFIG_YAML"
     exit 1
   }
 
-  sed -i "s|url: http://127.0.0.1:${current_port}|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
+  sed -i -E "s|(url:[[:space:]]*http://[^:]+:)${current_port}|\1${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
     error "Не удалось обновить url в $CREDENTIALS_YAML"
     exit 1
   }
-
-  # Fallback replacement patterns if exact line mismatch existed
-  if ! grep -q "listen_uri: 127.0.0.1:${LAPI_PORT}" "$CONFIG_YAML"; then
-    sed -i -E "s|listen_uri:[[:space:]]*127.0.0.1:[0-9]+|listen_uri: 127.0.0.1:${LAPI_PORT}|g" "$CONFIG_YAML" || {
-      error "Не удалось применить fallback патч listen_uri"
-      exit 1
-    }
-  fi
-
-  if ! grep -q "url: http://127.0.0.1:${LAPI_PORT}" "$CREDENTIALS_YAML"; then
-    sed -i -E "s|url:[[:space:]]*http://127.0.0.1:[0-9]+|url: http://127.0.0.1:${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
-      error "Не удалось применить fallback патч url"
-      exit 1
-    }
-  fi
 
   grep -q "${LAPI_PORT}" "$CONFIG_YAML"
   if [ $? -ne 0 ]; then
@@ -627,10 +612,7 @@ finalize_installation() {
 
 connect_console() {
   local console_token
-  local enroll_help
   local enroll_output
-  local enroll_rc=1
-  local enroll_ok=1
 
   info "Подключение к CrowdSec Console"
   echo "1) Откройте ${CONSOLE_URL}"
@@ -638,7 +620,7 @@ connect_console() {
   echo "3) Скопируйте Enrollment Token"
 
   while true; do
-    read -rsp "$(echo -e "${YELLOW}➤ Вставьте Enrollment Token и нажмите Enter: ${NC}")" console_token
+    read -rsp "$(echo -e "${YELLOW}➤ Вставьте Enrollment Token и нажмите Enter: ${NC}")" console_token </dev/tty
     echo ""
     if [ -z "$console_token" ]; then
       warning "Токен не может быть пустым."
@@ -651,38 +633,18 @@ connect_console() {
     break
   done
 
-  enroll_help="$(cscli console enroll --help 2>&1 || true)"
-
-  enroll_output="$(printf '%s\n' "$console_token" | cscli console enroll 2>&1)"
-  enroll_rc=$?
-  if [ "$enroll_rc" -eq 0 ]; then
-    enroll_ok=0
-  else
-    if echo "$enroll_help" | grep -q -- "--token"; then
-      enroll_output="$(cscli console enroll --token "$console_token" 2>&1)"
-      enroll_rc=$?
-      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
-    elif echo "$enroll_help" | grep -q -- "-t"; then
-      enroll_output="$(cscli console enroll -t "$console_token" 2>&1)"
-      enroll_rc=$?
-      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
-    else
-      enroll_output="$(cscli console enroll "$console_token" 2>&1)"
-      enroll_rc=$?
-      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
-    fi
-  fi
+  enroll_output="$(cscli console enroll "$console_token" 2>&1)"
 
   console_token=""
 
-  if [ "$enroll_ok" -ne 0 ]; then
-    error "Не удалось выполнить enrollment в Console. Проверьте токен."
+  if [ $? -ne 0 ]; then
+    warning "Не удалось выполнить enrollment в Console. Шаг будет пропущен."
     echo "$enroll_output"
-    exit 1
+    return 0
   fi
   success "Enrollment token принят."
 
-  read -rp "$(echo -e "${YELLOW}➤ Подтвердите подключение на ${CONSOLE_URL}, затем нажмите Enter для продолжения: ${NC}")" _
+  read -rp "$(echo -e "${YELLOW}➤ Подтвердите подключение на ${CONSOLE_URL}, затем нажмите Enter для продолжения: ${NC}")" _ </dev/tty
 
   systemctl restart crowdsec || { error "Не удалось перезапустить crowdsec после подтверждения в Console"; exit 1; }
   sleep "$CROWDSEC_RESTART_WAIT_SECONDS"
@@ -727,7 +689,13 @@ print_final_summary() {
 # =========================================================
 
 main() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}[✘] Этот скрипт должен запускаться от root. Используйте: sudo bash crowdsecinstall.sh${NC}" >&2
+    exit 1
+  fi
+
   init_logging
+  success "Проверка root пройдена"
   print_banner
 
   print_separator
