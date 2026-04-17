@@ -444,6 +444,9 @@ install_and_configure_bouncer() {
   fi
 
   BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r 'if type=="string" then . elif type=="object" then (.api_key // .key // .credentials.api_key // .credentials.key // empty) else empty end' 2>/dev/null | head -n1)"
+  if ! echo "$BOUNCER_API_KEY" | grep -Eq "^[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}$"; then
+    BOUNCER_API_KEY=""
+  fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Last-resort JSON fallback for non-standard nesting from older/newer cscli versions.
     BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r ".. | .api_key? // .key? // strings | select(test(\"^[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}$\"))" 2>/dev/null | head -n1)"
@@ -451,10 +454,6 @@ install_and_configure_bouncer() {
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     # Fallback: extract token-like value only from key=value or key: value patterns.
     BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eio "(api[ _-]?key|key)[^:=]*[:=][[:space:]]*[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}" | grep -Eo "[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
-    [ -n "$BOUNCER_API_KEY" ] && warning "API ключ извлечён fallback-парсингом текста, проверьте корректность"
-  fi
-  if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
-    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eo "[-A-Za-z0-9_+/=]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
     [ -n "$BOUNCER_API_KEY" ] && warning "API ключ извлечён fallback-парсингом текста, проверьте корректность"
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
