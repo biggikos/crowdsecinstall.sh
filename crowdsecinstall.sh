@@ -353,12 +353,12 @@ configure_lapi_port() {
 
   info "Применяю новый порт LAPI: ${LAPI_PORT}"
 
-  sed -i -E "/^[[:space:]]*listen_uri:/ s|:${current_port}([[:space:]]*)$|:${LAPI_PORT}\1|g" "$CONFIG_YAML" || {
+  sed -i -E "/^[[:space:]]*listen_uri:/ s|:${current_port}([[:space:]]|$)|:${LAPI_PORT}\1|g" "$CONFIG_YAML" || {
     error "Не удалось обновить listen_uri в $CONFIG_YAML"
     exit 1
   }
 
-  sed -i -E "/^[[:space:]]*url:[[:space:]]*http(s)?:\\/\\// s|:${current_port}([[:space:]]*)$|:${LAPI_PORT}\1|g" "$CREDENTIALS_YAML" || {
+  sed -i -E "/^[[:space:]]*url:[[:space:]]*http(s)?:\\/\\// s|:${current_port}([[:space:]]|$)|:${LAPI_PORT}\1|g" "$CREDENTIALS_YAML" || {
     error "Не удалось обновить url в $CREDENTIALS_YAML"
     exit 1
   }
@@ -641,7 +641,7 @@ connect_console() {
 
   if [ "$enroll_rc" -ne 0 ]; then
     warning "Не удалось выполнить enrollment в Console. Шаг будет пропущен."
-    echo "$enroll_output"
+    echo "$enroll_output" | tee -a "$LOG_FILE"
     return 0
   fi
   success "Enrollment token принят."
