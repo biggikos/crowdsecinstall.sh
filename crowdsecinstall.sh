@@ -23,6 +23,9 @@ BOUNCER_CONFIG="/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml"
 ACQUISITION_YAML="/etc/crowdsec/acquisition.yaml"
 LOG_FILE="/var/log/crowdsec-install.log"
 BOUNCER_NAME="AutoBouncer-$(hostname)"
+LAPI_START_WAIT_SECONDS=3
+CROWDSEC_RESTART_WAIT_SECONDS=5
+BOUNCER_RESTART_WAIT_SECONDS=2
 
 LAPI_PORT="$DEFAULT_LAPI_PORT"
 BOUNCER_API_KEY=""
@@ -86,6 +89,7 @@ is_port_busy() {
 get_process_on_port() {
   local port="$1"
   local proc
+  # ss line example: users:(("nginx",pid=1234,fd=6))
   proc="$(ss -tulpn 2>/dev/null | grep ":${port} " | head -1 | awk -F'users:\\(\\(' '{print $2}' | awk -F'\\)\\)' '{print $1}')"
   if [ -z "$proc" ]; then
     proc="$(lsof -i :"${port}" 2>/dev/null | awk 'NR==2 {print $1 " (pid " $2 ")"}')"
@@ -361,7 +365,7 @@ install_and_configure_bouncer() {
   fi
 
   systemctl start crowdsec || { error "Не удалось запустить crowdsec перед генерацией ключа"; exit 1; }
-  sleep 3
+  sleep "$LAPI_START_WAIT_SECONDS"
 
   cscli bouncers list -o json 2>/dev/null | jq -r '.[].name' | grep -q "$BOUNCER_NAME"
   if [ $? -eq 0 ]; then
@@ -499,10 +503,10 @@ finalize_installation() {
   done
 
   systemctl restart crowdsec || { error "Не удалось перезапустить crowdsec"; exit 1; }
-  sleep 5
+  sleep "$CROWDSEC_RESTART_WAIT_SECONDS"
 
   systemctl restart crowdsec-firewall-bouncer || { error "Не удалось перезапустить crowdsec-firewall-bouncer"; exit 1; }
-  sleep 2
+  sleep "$BOUNCER_RESTART_WAIT_SECONDS"
 
   for service in crowdsec crowdsec-firewall-bouncer; do
     systemctl is-active --quiet "$service"
