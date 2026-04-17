@@ -403,8 +403,19 @@ install_and_configure_bouncer() {
   systemctl start crowdsec || { error "Не удалось запустить crowdsec перед генерацией ключа"; exit 1; }
   sleep "$LAPI_START_WAIT_SECONDS"
 
-  cscli bouncers list -o json 2>/dev/null | jq -r '.[].name' | grep -q "$BOUNCER_NAME"
-  if [ $? -eq 0 ]; then
+  local bouncer_exists=1
+  local bouncers_list_output
+  bouncers_list_output="$(cscli bouncers list -o json 2>/dev/null || true)"
+
+  if [ -n "$bouncers_list_output" ] && echo "$bouncers_list_output" | jq -e . >/dev/null 2>&1; then
+    echo "$bouncers_list_output" | jq -r '.. | .name? // empty' 2>/dev/null | grep -Fxq "$BOUNCER_NAME"
+    bouncer_exists=$?
+  else
+    cscli bouncers list 2>/dev/null | grep -Fq "$BOUNCER_NAME"
+    bouncer_exists=$?
+  fi
+
+  if [ $bouncer_exists -eq 0 ]; then
     warning "Баунсер уже зарегистрирован, пересоздаю ключ"
     cscli bouncers delete "$BOUNCER_NAME" 2>/dev/null
     [ $? -ne 0 ] && warning "Не удалось удалить старый баунсер, продолжаю"
@@ -418,9 +429,13 @@ install_and_configure_bouncer() {
     exit 1
   fi
 
-  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.api_key // .key // empty')"
+  BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.. | .api_key? // .key? // empty' 2>/dev/null | head -n1)"
+  if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Eo '[A-Za-z0-9_-]{20,}' | head -n1)"
+  fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     error "API ключ пустой или невалидный"
+    echo "$bouncer_key_json"
     exit 1
   fi
   success "API ключ для баунсера создан"
