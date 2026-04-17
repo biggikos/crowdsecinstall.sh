@@ -232,7 +232,7 @@ detect_firewall_mode() {
     if nft list tables >/dev/null 2>&1; then
       if iptables --version 2>/dev/null | grep -q "legacy"; then
         mode_detected="iptables"
-      else
+      elif iptables --version 2>/dev/null | grep -qi "nf_tables"; then
         mode_detected="nftables"
       fi
     fi
@@ -353,12 +353,12 @@ configure_lapi_port() {
 
   info "Применяю новый порт LAPI: ${LAPI_PORT}"
 
-  sed -i -E "s|(listen_uri:[[:space:]]*)([^:]+:)${current_port}|\1\2${LAPI_PORT}|g" "$CONFIG_YAML" || {
+  sed -i -E "/^[[:space:]]*listen_uri:/ s|:${current_port}([[:space:]]*)$|:${LAPI_PORT}\1|g" "$CONFIG_YAML" || {
     error "Не удалось обновить listen_uri в $CONFIG_YAML"
     exit 1
   }
 
-  sed -i -E "s|(url:[[:space:]]*http://[^:]+:)${current_port}|\1${LAPI_PORT}|g" "$CREDENTIALS_YAML" || {
+  sed -i -E "/^[[:space:]]*url:[[:space:]]*http(s)?:\\/\\// s|:${current_port}([[:space:]]*)$|:${LAPI_PORT}\1|g" "$CREDENTIALS_YAML" || {
     error "Не удалось обновить url в $CREDENTIALS_YAML"
     exit 1
   }
@@ -633,11 +633,13 @@ connect_console() {
     break
   done
 
+  local enroll_rc
   enroll_output="$(cscli console enroll "$console_token" 2>&1)"
+  enroll_rc=$?
 
   console_token=""
 
-  if [ $? -ne 0 ]; then
+  if [ "$enroll_rc" -ne 0 ]; then
     warning "Не удалось выполнить enrollment в Console. Шаг будет пропущен."
     echo "$enroll_output"
     return 0
