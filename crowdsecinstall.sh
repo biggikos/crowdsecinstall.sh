@@ -413,7 +413,7 @@ install_and_configure_bouncer() {
   local bouncers_list_output
   bouncers_list_output="$(cscli bouncers list -o json 2>/dev/null || true)"
 
-  if [ -n "$bouncers_list_output" ] && echo "$bouncers_list_output" | jq -e . >/dev/null 2>&1; then
+  if [ -n "$bouncers_list_output" ] && echo "$bouncers_list_output" | jq -e 'type=="array" or type=="object"' >/dev/null 2>&1; then
     echo "$bouncers_list_output" | jq -r "$JQ_BOUNCER_NAMES_FILTER" 2>/dev/null | grep -Fq "$BOUNCER_NAME"
     bouncer_check_result=$?
   else
@@ -447,7 +447,6 @@ install_and_configure_bouncer() {
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     error "API ключ пустой или невалидный"
-    echo "$bouncer_key_json"
     exit 1
   fi
   success "API ключ для баунсера создан"
