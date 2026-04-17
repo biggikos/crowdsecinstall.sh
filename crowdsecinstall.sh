@@ -65,11 +65,11 @@ NC='\033[0m' # No Color / Reset
 # 3. Объявление всех вспомогательных функций
 # =========================================================
 
-success()  { echo -e "${GREEN}[✔] $1${NC}" | tee -a "$LOG_FILE"; }
-error()    { echo -e "${RED}[✘] $1${NC}" | tee -a "$LOG_FILE" >&2; }
-warning()  { echo -e "${YELLOW}[!] $1${NC}" | tee -a "$LOG_FILE"; }
-info()     { echo -e "${BLUE}[i] $1${NC}" | tee -a "$LOG_FILE"; }
-step()     { echo -e "\n${CYAN}${BOLD}>>> $1${NC}" | tee -a "$LOG_FILE"; }
+success()  { if [ -f "$LOG_FILE" ]; then echo -e "${GREEN}[✔] $1${NC}" | tee -a "$LOG_FILE"; else echo -e "${GREEN}[✔] $1${NC}"; fi; }
+error()    { if [ -f "$LOG_FILE" ]; then echo -e "${RED}[✘] $1${NC}" | tee -a "$LOG_FILE" >&2; else echo -e "${RED}[✘] $1${NC}" >&2; fi; }
+warning()  { if [ -f "$LOG_FILE" ]; then echo -e "${YELLOW}[!] $1${NC}" | tee -a "$LOG_FILE"; else echo -e "${YELLOW}[!] $1${NC}"; fi; }
+info()     { if [ -f "$LOG_FILE" ]; then echo -e "${BLUE}[i] $1${NC}" | tee -a "$LOG_FILE"; else echo -e "${BLUE}[i] $1${NC}"; fi; }
+step()     { if [ -f "$LOG_FILE" ]; then echo -e "\n${CYAN}${BOLD}>>> $1${NC}" | tee -a "$LOG_FILE"; else echo -e "\n${CYAN}${BOLD}>>> $1${NC}"; fi; }
 
 print_separator() {
   echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -353,12 +353,12 @@ configure_lapi_port() {
 
   info "Применяю новый порт LAPI: ${LAPI_PORT}"
 
-  sed -i -E "/^[[:space:]]*listen_uri:/ s|:${current_port}([[:space:]]|$)|:${LAPI_PORT}\1|g" "$CONFIG_YAML" || {
+  sed -i -E "/^[[:space:]]*listen_uri:/ s|:${current_port}([[:space:]]*(#.*)?$)|:${LAPI_PORT}\1|g" "$CONFIG_YAML" || {
     error "Не удалось обновить listen_uri в $CONFIG_YAML"
     exit 1
   }
 
-  sed -i -E "/^[[:space:]]*url:[[:space:]]*http(s)?:\\/\\// s|:${current_port}([[:space:]]|$)|:${LAPI_PORT}\1|g" "$CREDENTIALS_YAML" || {
+  sed -i -E "/^[[:space:]]*url:[[:space:]]*http(s)?:\\/\\// s|:${current_port}([[:space:]]*(#.*)?$)|:${LAPI_PORT}\1|g" "$CREDENTIALS_YAML" || {
     error "Не удалось обновить url в $CREDENTIALS_YAML"
     exit 1
   }
@@ -642,6 +642,7 @@ connect_console() {
   if [ "$enroll_rc" -ne 0 ]; then
     warning "Не удалось выполнить enrollment в Console. Шаг будет пропущен."
     echo "$enroll_output" | tee -a "$LOG_FILE"
+    info "Продолжаю установку без подключения к CrowdSec Console."
     return 0
   fi
   success "Enrollment token принят."
