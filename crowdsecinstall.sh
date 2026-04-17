@@ -24,6 +24,8 @@ BOUNCER_CONFIG="/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml"
 ACQUISITION_YAML="/etc/crowdsec/acquisition.yaml"
 LOG_FILE="/var/log/crowdsec-install.log"
 BOUNCER_NAME="AutoBouncer-$(hostname)"
+JQ_BOUNCER_NAMES_FILTER='if type=="array" then .[]?.name // empty elif type=="object" then (.name // (.bouncers[]?.name // empty)) else empty end'
+API_KEY_FALLBACK_MIN_LEN=20
 LAPI_START_WAIT_SECONDS=3
 CROWDSEC_RESTART_WAIT_SECONDS=5
 BOUNCER_RESTART_WAIT_SECONDS=2
@@ -408,7 +410,7 @@ install_and_configure_bouncer() {
   bouncers_list_output="$(cscli bouncers list -o json 2>/dev/null || true)"
 
   if [ -n "$bouncers_list_output" ] && echo "$bouncers_list_output" | jq -e . >/dev/null 2>&1; then
-    echo "$bouncers_list_output" | jq -r 'if type=="array" then .[]?.name // empty elif type=="object" then (.name // (.bouncers[]?.name // empty)) else empty end' 2>/dev/null | grep -Fxq "$BOUNCER_NAME"
+    echo "$bouncers_list_output" | jq -r "$JQ_BOUNCER_NAMES_FILTER" 2>/dev/null | grep -Fxq "$BOUNCER_NAME"
     bouncer_check_result=$?
   else
     cscli bouncers list 2>/dev/null | grep -Fq "$BOUNCER_NAME"
@@ -434,7 +436,8 @@ install_and_configure_bouncer() {
     BOUNCER_API_KEY="$(echo "$bouncer_key_json" | jq -r '.. | .api_key? // .key? // empty' 2>/dev/null | head -n1)"
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
-    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Ei '(api[ _-]?key|key)' | grep -Eo '[A-Za-z0-9_-]{20,}' | head -n1)"
+    # Fallback: extract token-like value from lines mentioning key; 20 chars reduces accidental short matches.
+    BOUNCER_API_KEY="$(echo "$bouncer_key_json" | grep -Ei '(api[ _-]?key|key)' | grep -Eo "[A-Za-z0-9_-]{${API_KEY_FALLBACK_MIN_LEN},}" | head -n1)"
   fi
   if [ -z "$BOUNCER_API_KEY" ] || [ "$BOUNCER_API_KEY" = "null" ]; then
     error "API ключ пустой или невалидный"
