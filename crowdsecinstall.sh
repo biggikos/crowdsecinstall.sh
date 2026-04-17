@@ -234,10 +234,17 @@ preflight_checks() {
 }
 
 detect_firewall_mode() {
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -qi "nf_tables"; then
-    FIREWALL_MODE="nftables"
-    FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
-  elif command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+  if command -v iptables >/dev/null 2>&1; then
+    local iptables_version
+    iptables_version="$(iptables -V 2>/dev/null)"
+    if echo "$iptables_version" | grep -qi "nf_tables"; then
+      FIREWALL_MODE="nftables"
+      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
+    else
+      FIREWALL_MODE="iptables"
+      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
+    fi
+  elif command -v nft >/dev/null 2>&1; then
     FIREWALL_MODE="nftables"
     FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
   else
