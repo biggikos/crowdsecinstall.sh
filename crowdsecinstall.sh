@@ -432,14 +432,16 @@ mode: ${FIREWALL_MODE}
 EOF
     cfg_status=$?
     if [ "$FIREWALL_MODE" = "iptables" ]; then
+      local append_status=0
       cat >> "$BOUNCER_CONFIG" <<'EOF'
 iptables_chains:
   - INPUT
   - FORWARD
   - DOCKER-USER
 EOF
+      append_status=$?
       if [ "$cfg_status" -eq 0 ]; then
-        cfg_status=$?
+        cfg_status=$append_status
       fi
     fi
     if [ "$cfg_status" -ne 0 ]; then
