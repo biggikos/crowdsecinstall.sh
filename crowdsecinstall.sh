@@ -588,6 +588,7 @@ finalize_installation() {
 
 connect_console() {
   local console_token
+  local enroll_help
   local enroll_output
   local enroll_rc=1
   local enroll_ok=1
@@ -611,21 +612,29 @@ connect_console() {
     break
   done
 
-  enroll_output="$(cscli console enroll --token "$console_token" 2>&1)"
+  enroll_help="$(cscli console enroll --help 2>&1 || true)"
+
+  enroll_output="$(printf '%s\n' "$console_token" | cscli console enroll 2>&1)"
   enroll_rc=$?
   if [ "$enroll_rc" -eq 0 ]; then
     enroll_ok=0
   else
-    enroll_output="$(cscli console enroll -t "$console_token" 2>&1)"
-    enroll_rc=$?
-    if [ "$enroll_rc" -eq 0 ]; then
-      enroll_ok=0
+    if echo "$enroll_help" | grep -q -- "--token"; then
+      enroll_output="$(cscli console enroll --token "$console_token" 2>&1)"
+      enroll_rc=$?
+      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
+    elif echo "$enroll_help" | grep -q -- "-t"; then
+      enroll_output="$(cscli console enroll -t "$console_token" 2>&1)"
+      enroll_rc=$?
+      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
     else
       enroll_output="$(cscli console enroll "$console_token" 2>&1)"
       enroll_rc=$?
       [ "$enroll_rc" -eq 0 ] && enroll_ok=0
     fi
   fi
+
+  console_token=""
 
   if [ "$enroll_ok" -ne 0 ]; then
     error "Не удалось выполнить enrollment в Console. Проверьте токен."
