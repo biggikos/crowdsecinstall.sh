@@ -417,7 +417,6 @@ install_and_configure_bouncer() {
   mkdir -p "$(dirname "$BOUNCER_CONFIG")" || { error "Не удалось создать каталог для конфига баунсера"; exit 1; }
 
   if [ ! -s "$BOUNCER_CONFIG" ]; then
-    local cfg_status=0
     cat > "$BOUNCER_CONFIG" <<EOF
 api_key: "${BOUNCER_API_KEY}"
 api_url: "http://127.0.0.1:${LAPI_PORT}"
@@ -430,23 +429,28 @@ log_max_size: 100
 log_max_backups: 3
 mode: ${FIREWALL_MODE}
 EOF
-    cfg_status=$?
+    if [ $? -ne 0 ]; then
+      error "Не удалось создать конфиг баунсера"
+      exit 1
+    fi
+
     if [ "$FIREWALL_MODE" = "iptables" ]; then
-      local append_status=0
       cat >> "$BOUNCER_CONFIG" <<'EOF'
 iptables_chains:
   - INPUT
   - FORWARD
-  - DOCKER-USER
 EOF
-      append_status=$?
-      if [ "$cfg_status" -eq 0 ]; then
-        cfg_status=$append_status
+      if [ $? -ne 0 ]; then
+        error "Не удалось добавить iptables_chains в $BOUNCER_CONFIG"
+        exit 1
       fi
-    fi
-    if [ "$cfg_status" -ne 0 ]; then
-      error "Не удалось создать конфиг баунсера"
-      exit 1
+
+      if iptables -S DOCKER-USER >/dev/null 2>&1 || ip6tables -S DOCKER-USER >/dev/null 2>&1; then
+        printf '  - DOCKER-USER\n' >> "$BOUNCER_CONFIG" || {
+          error "Не удалось добавить DOCKER-USER в $BOUNCER_CONFIG"
+          exit 1
+        }
+      fi
     fi
     success "Создан новый конфиг баунсера: $BOUNCER_CONFIG"
   else
