@@ -605,8 +605,8 @@ connect_console() {
       warning "Токен не может быть пустым."
       continue
     fi
-    if ! echo "$console_token" | grep -Eq '^[A-Za-z0-9._:/+=-]{10,}$'; then
-      warning "Токен выглядит некорректно (разрешены только латиница/цифры и . _ : / + = -)."
+    if ! echo "$console_token" | grep -Eq '^[A-Za-z0-9._+=-]{10,}$'; then
+      warning "Токен выглядит некорректно (разрешены только латиница/цифры и . _ + = -)."
       continue
     fi
     break
