@@ -589,6 +589,7 @@ finalize_installation() {
 connect_console() {
   local console_token
   local enroll_output
+  local enroll_rc=1
   local enroll_ok=1
 
   info "Подключение к CrowdSec Console"
@@ -599,20 +600,30 @@ connect_console() {
   while true; do
     read -rsp "$(echo -e "${YELLOW}➤ Вставьте Enrollment Token и нажмите Enter: ${NC}")" console_token
     echo ""
-    [ -n "$console_token" ] && break
-    warning "Токен не может быть пустым."
+    if [ -z "$console_token" ]; then
+      warning "Токен не может быть пустым."
+      continue
+    fi
+    if ! echo "$console_token" | grep -Eq '^[A-Za-z0-9._:/+=-]{10,}$'; then
+      warning "Токен выглядит некорректно (разрешены только латиница/цифры и . _ : / + = -)."
+      continue
+    fi
+    break
   done
 
   enroll_output="$(cscli console enroll --token "$console_token" 2>&1)"
-  if [ $? -eq 0 ]; then
+  enroll_rc=$?
+  if [ "$enroll_rc" -eq 0 ]; then
     enroll_ok=0
   else
     enroll_output="$(cscli console enroll -t "$console_token" 2>&1)"
-    if [ $? -eq 0 ]; then
+    enroll_rc=$?
+    if [ "$enroll_rc" -eq 0 ]; then
       enroll_ok=0
     else
       enroll_output="$(cscli console enroll "$console_token" 2>&1)"
-      [ $? -eq 0 ] && enroll_ok=0
+      enroll_rc=$?
+      [ "$enroll_rc" -eq 0 ] && enroll_ok=0
     fi
   fi
 
