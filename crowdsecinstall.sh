@@ -14,7 +14,7 @@ SCRIPT_VERSION="1.0.0"
 SCRIPT_AUTHOR="DevOps Automation"
 SCRIPT_DATE="2026-04-17"
 
-CROWDSEC_REPO_SCRIPT="https://packagecloud.io/install/repositories/crowdsec/crowdsec/script.deb.sh"
+CROWDSEC_REPO_INSTALL_URL="https://install.crowdsec.net"
 DEFAULT_LAPI_PORT=8080
 FALLBACK_LAPI_PORT=7422
 CONFIG_YAML="/etc/crowdsec/config.yaml"
@@ -29,6 +29,8 @@ BOUNCER_RESTART_WAIT_SECONDS=2
 
 LAPI_PORT="$DEFAULT_LAPI_PORT"
 BOUNCER_API_KEY=""
+FIREWALL_MODE="iptables"
+FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
 
 DEPENDENCIES=(
   "curl"
@@ -220,13 +222,36 @@ preflight_checks() {
     fi
   done
 
+  detect_firewall_mode
+
   # 1.4 Internet check
-  curl -s --max-time 5 https://packagecloud.io > /dev/null
+  curl -s --max-time 5 "$CROWDSEC_REPO_INSTALL_URL" > /dev/null
   if [ $? -ne 0 ]; then
-    error "Нет доступа к https://packagecloud.io. Проверьте интернет-соединение."
+    error "Нет доступа к ${CROWDSEC_REPO_INSTALL_URL}. Проверьте интернет-соединение."
     exit 1
   fi
   success "Интернет-соединение проверено"
+}
+
+detect_firewall_mode() {
+  if command -v iptables >/dev/null 2>&1; then
+    local iptables_version
+    iptables_version="$(iptables -V 2>/dev/null)"
+    if echo "$iptables_version" | grep -qi "nf_tables"; then
+      FIREWALL_MODE="nftables"
+      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
+    else
+      FIREWALL_MODE="iptables"
+      FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
+    fi
+  elif command -v nft >/dev/null 2>&1; then
+    FIREWALL_MODE="nftables"
+    FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-nftables"
+  else
+    FIREWALL_MODE="iptables"
+    FIREWALL_BOUNCER_PACKAGE="crowdsec-firewall-bouncer-iptables"
+  fi
+  info "Выбран режим Firewall Bouncer: ${FIREWALL_MODE} (${FIREWALL_BOUNCER_PACKAGE})"
 }
 
 install_crowdsec() {
@@ -237,7 +262,7 @@ install_crowdsec() {
   fi
 
   step "Добавление репозитория CrowdSec"
-  curl -s "$CROWDSEC_REPO_SCRIPT" | bash
+  curl -fsSL "$CROWDSEC_REPO_INSTALL_URL" | sh
   if [ $? -ne 0 ]; then
     error "Не удалось добавить репозиторий CrowdSec"
     exit 1
@@ -356,12 +381,12 @@ configure_lapi_port() {
 }
 
 install_and_configure_bouncer() {
-  dpkg -l crowdsec-firewall-bouncer-iptables 2>/dev/null | grep -q "^ii"
+  dpkg -l "$FIREWALL_BOUNCER_PACKAGE" 2>/dev/null | grep -q "^ii"
   if [ $? -eq 0 ]; then
-    info "crowdsec-firewall-bouncer-iptables уже установлен"
+    info "${FIREWALL_BOUNCER_PACKAGE} уже установлен"
   else
-    apt-get install -y crowdsec-firewall-bouncer-iptables || { error "Не удалось установить crowdsec-firewall-bouncer-iptables"; exit 1; }
-    success "Firewall bouncer установлен"
+    apt-get install -y "$FIREWALL_BOUNCER_PACKAGE" || { error "Не удалось установить ${FIREWALL_BOUNCER_PACKAGE}"; exit 1; }
+    success "Firewall bouncer установлен (${FIREWALL_BOUNCER_PACKAGE})"
   fi
 
   systemctl start crowdsec || { error "Не удалось запустить crowdsec перед генерацией ключа"; exit 1; }
@@ -402,15 +427,30 @@ log_level: info
 log_compression: true
 log_max_size: 100
 log_max_backups: 3
-mode: iptables
-iptables_chains:
-  - INPUT
-  - FORWARD
-  - DOCKER-USER
+mode: ${FIREWALL_MODE}
 EOF
     if [ $? -ne 0 ]; then
       error "Не удалось создать конфиг баунсера"
       exit 1
+    fi
+
+    if [ "$FIREWALL_MODE" = "iptables" ]; then
+      cat >> "$BOUNCER_CONFIG" <<'EOF'
+iptables_chains:
+  - INPUT
+  - FORWARD
+EOF
+      if [ $? -ne 0 ]; then
+        error "Не удалось добавить iptables_chains в $BOUNCER_CONFIG"
+        exit 1
+      fi
+
+      if iptables -S DOCKER-USER >/dev/null 2>&1 || ip6tables -S DOCKER-USER >/dev/null 2>&1; then
+        printf '  - DOCKER-USER\n' >> "$BOUNCER_CONFIG" || {
+          error "Не удалось добавить DOCKER-USER в $BOUNCER_CONFIG"
+          exit 1
+        }
+      fi
     fi
     success "Создан новый конфиг баунсера: $BOUNCER_CONFIG"
   else
@@ -428,6 +468,18 @@ EOF
     else
       printf '\napi_url: "http://127.0.0.1:%s"\n' "$LAPI_PORT" >> "$BOUNCER_CONFIG" || {
         error "Не удалось добавить api_url в $BOUNCER_CONFIG"
+        exit 1
+      }
+    fi
+
+    if grep -q "^mode:" "$BOUNCER_CONFIG"; then
+      sed -i -E "s|^mode:.*|mode: ${FIREWALL_MODE}|g" "$BOUNCER_CONFIG" || {
+        error "Не удалось обновить mode в $BOUNCER_CONFIG"
+        exit 1
+      }
+    else
+      printf '\nmode: %s\n' "$FIREWALL_MODE" >> "$BOUNCER_CONFIG" || {
+        error "Не удалось добавить mode в $BOUNCER_CONFIG"
         exit 1
       }
     fi
