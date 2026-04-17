@@ -31,6 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/biggikos/crowdsecinstall.sh/main/cr
 6. Создаёт/обновляет конфиг bouncer.
 7. По запросу добавляет Nginx-коллекции и acquisition.
 8. Перезапускает сервисы и выводит итоговую сводку.
+9. Подключает сервер к CrowdSec Console через Enrollment Token из `https://app.crowdsec.net`.
 
 ## Поддерживаемые ОС
 
